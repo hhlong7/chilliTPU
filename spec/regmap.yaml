@@ -1,0 +1,34 @@
+# Register map and layer descriptor: single source of truth.
+# scripts/gen_regs.py generates rtl/pkg/dnn_regs_pkg.sv, fw/src/dnn_regs.h, sw/py/dnn_regs.py.
+#
+# Status: SKELETON. Every register below is a placeholder until the group agrees on it.
+
+meta:
+  name: dnn
+  data_width: 32
+  addr_width: 12
+  version: 0
+
+registers:
+  - name: CTRL
+    offset: 0x000
+    access: rw
+    fields:
+      - {name: START, bits: "0", desc: "write 1 to start the queued layers (self-clearing)"}
+      - {name: SOFT_RESET, bits: "1", desc: "write 1 to reset the accelerator state"}
+      - {name: MODE, bits: "3:2", desc: "0 sequential, 1 equal split (paper), 2 proportional (ours)"}
+  - name: STATUS
+    offset: 0x004
+    access: ro
+    fields:
+      - {name: BUSY, bits: "0", desc: "accelerator running"}
+      - {name: DONE, bits: "1", desc: "all queued layers finished"}
+  - name: CYCLES
+    offset: 0x008
+    access: ro
+    fields:
+      - {name: COUNT, bits: "31:0", desc: "cycles since START"}
+
+# TODO: layer queue / descriptor (M, K, N, buffer bases, bias, scale, shift, relu, tenant id),
+#       per-tenant done flags and cycle counters, overflow flags.
+layer_descriptor: {}

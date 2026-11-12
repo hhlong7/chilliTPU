@@ -1,0 +1,44 @@
+{
+    "editor.semanticHighlighting.enabled": true,
+    "editor.semanticTokenColorCustomizations": {
+        "rules": {
+            "clock": {
+                "foreground": "#00E5FF",
+                "bold": true
+            },
+            "reset": {
+                "foreground": "#FF6E40",
+                "bold": true
+            },
+            "reg": {
+                "foreground": "#E040FB",
+                "italic": true
+            },
+            "wire": {
+                "foreground": "#69F0AE"
+            },
+            "portInput": {
+                "foreground": "#82AAFF",
+                "bold": true
+            },
+            "portOutput": {
+                "foreground": "#FFD740",
+                "bold": true
+            },
+            "portInout": {
+                "foreground": "#FFAB40"
+            },
+            "verilogParameter": {
+                "foreground": "#F0F4F8",
+                "bold": true
+            },
+            "moduleDef": {
+                "foreground": "#7C4DFF",
+                "bold": true
+            },
+            "moduleInstance": {
+                "foreground": "#B388FF"
+            }
+        }
+    }
+}

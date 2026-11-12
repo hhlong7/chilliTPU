@@ -59,12 +59,14 @@ Rules:
 Do not start a milestone's RTL until the previous gate passes. Python and FPGA-path work may run ahead in parallel.
 
 ### M0 — Repo and tooling (Week 1)
-- [ ] Directory layout (section 7) and `Makefile` targets: `vectors`, `sim`, `bitstream`, `fw`, `report`
-- [ ] `results/tooling.md`: tools found on each machine (Mac and the Vivado PC)
-- [ ] Add Accellera UVM 2020.3.1 (IEEE 1800.2-2020, Apache-2.0) under `third_party/uvm-core/`, pinned to a fixed commit
-- [ ] UVM smoke test (tiny DUT + agent + scoreboard) wired into `make sim`, building in Verilator on the Mac and xsim on the Vivado PC
-- [ ] `tb/common/` shared UVM kit skeleton (section 6)
-- [ ] `results/log.md` started
+- [x] Directory layout (section 7) and `Makefile` targets: `vectors`, `regs`, `sim`, `sim-xsim`, `lint`, `bitstream`, `fw`, `report` (most are stubs until their milestone)
+- [ ] `results/tooling.md`: tools found on each machine (Mac done; Vivado PC section still to fill in)
+- [x] Add Accellera UVM 2020.3.1 (IEEE 1800.2-2020, Apache-2.0) under `third_party/uvm-core/`, pinned to a fixed commit
+- [x] UVM smoke test (tiny DUT + agent + scoreboard) wired into `make sim`; passes in Verilator on the Mac
+- [ ] Same smoke test in xsim on the Vivado PC (`make sim-xsim TB=smoke`)
+- [x] `tb/common/` shared UVM kit skeleton (section 6); stub files only
+- [x] `results/log.md` started
+- [x] Stub files for every RTL module (lint clean), UVM env skeleton per module, Python/firmware/FPGA stubs
 - **Gate:** `make sim` prints PASS for the UVM smoke test on a clean clone, in Verilator and in xsim.
 
 ### M1 — Python golden model and cycle model (Week 1)
@@ -158,6 +160,7 @@ tb/<module>/
   <module>_pkg.sv       seq_item, sequences, agent(s), ref model, scoreboard, coverage, env, tests
   <module>_sva.sv       assertions, bound to the DUT with `bind`
   tb_top.sv             clock/reset, DUT, interface, config_db, run_test()
+  files.f               source list (repo-relative), shared by Verilator and xsim
   tests.txt             list of tests + seeds that make sim runs
 ```
 Every env has: an agent (driver + monitor + sequencer) per DUT port group, a reference model, a scoreboard that compares every output, a coverage collector, and at least a `smoke`, `edge`, and `random` test. Every test ends with one line: `PASS <module>.<test> seed=<s>` or `FAIL ...`.

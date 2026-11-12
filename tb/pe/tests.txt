@@ -1,0 +1,2 @@
+# Tests that `make sim TB=pe` runs: one "<uvm_test_name> <seed>" per line.
+# Add this env to TBS in the Makefile once its first test passes.

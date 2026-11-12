@@ -1,0 +1,3 @@
+# <uvm_test_name> <seed>
+smoke_test 1
+smoke_test 42
