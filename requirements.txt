@@ -1,0 +1,3 @@
+numpy>=2.0
+pyyaml>=6.0        # spec/regmap.yaml -> generated .sv/.h/.py
+# torch            # only for sw/py/quantize.py; install separately when needed

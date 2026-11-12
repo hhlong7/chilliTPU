@@ -1,0 +1,33 @@
+# Simulation builds
+build/
+obj_dir/
+*.vcd
+*.fst
+*.wdb
+*.log
+!results/**/*.log
+
+# Generated test vectors (rebuild with `make vectors`)
+vectors/
+
+# Generated register files (rebuild with `make regs`)
+rtl/pkg/dnn_regs_pkg.sv
+fw/src/dnn_regs.h
+sw/py/dnn_regs.py
+
+# Vivado / Vitis
+.Xil/
+xsim.dir/
+*.jou
+*.pb
+*.wdb
+fpga/build/
+fw/vitis_ws/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
