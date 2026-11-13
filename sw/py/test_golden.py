@@ -15,7 +15,7 @@ from fractions import Fraction
 
 import numpy as np
 
-from golden import layer, matmul_int8, requantize
+from golden import conv2d, im2col, layer, matmul_int8, maxpool2d, requantize
 
 SEED = 20261112
 
@@ -38,6 +38,21 @@ def ref_requant_one(a, b, scale, shift, relu):
 
 def ref_requantize(acc, bias, scale, shift, relu):
     return [[ref_requant_one(a, bias[n], scale, shift, relu) for n, a in enumerate(row)] for row in acc]
+
+
+def ref_conv_acc(x, w_torch, stride, padding):
+    """Direct conv, no im2col: x [B][C][H][W], w_torch [N][C][kh][kw] -> acc [B][N][Ho][Wo]."""
+    B, C, H, W = len(x), len(x[0]), len(x[0][0]), len(x[0][0][0])
+    N, kh, kw = len(w_torch), len(w_torch[0][0]), len(w_torch[0][0][0])
+    Ho, Wo = (H + 2 * padding - kh) // stride + 1, (W + 2 * padding - kw) // stride + 1
+
+    def px(b, c, y, xx):
+        y, xx = y - padding, xx - padding
+        return x[b][c][y][xx] if 0 <= y < H and 0 <= xx < W else 0
+
+    return [[[[sum(px(b, c, oy * stride + i, ox * stride + j) * w_torch[n][c][i][j]
+                   for c in range(C) for i in range(kh) for j in range(kw))
+               for ox in range(Wo)] for oy in range(Ho)] for n in range(N)] for b in range(B)]
 
 
 def i8(rows):
@@ -203,6 +218,65 @@ class TestRequantize(unittest.TestCase):
             with self.subTest(name):
                 with self.assertRaises(err):
                     requantize(acc, bias, scale, shift, relu=False)
+
+
+# ---------------- im2col / conv2d / maxpool2d ----------------
+
+class TestConv(unittest.TestCase):
+
+    def test_im2col_layout(self):
+        # 1 image, 2 channels, 3x3, 2x2 kernel: first row is the top-left patch, (c, i, j) order
+        x = np.arange(18, dtype=np.int8).reshape(1, 2, 3, 3)
+        X = im2col(x, 2, 2)
+        self.assertEqual(X.shape, (4, 8))
+        self.assertEqual(X[0].tolist(), [0, 1, 3, 4, 9, 10, 12, 13])
+        self.assertEqual(X[3].tolist(), [4, 5, 7, 8, 13, 14, 16, 17])   # (oy, ox) = (1, 1)
+
+    def test_padding_is_zero(self):
+        X = im2col(np.full((1, 1, 2, 2), 5, np.int8), 3, 3, padding=1)
+        self.assertEqual(X.shape, (4, 9))
+        self.assertEqual(X[0].tolist(), [0, 0, 0, 0, 5, 5, 0, 5, 5])
+
+    def test_conv_vs_direct_reference(self):
+        # im2col @ weight.reshape(N, -1).T must equal a direct conv on the PyTorch layout
+        rng = np.random.default_rng(SEED)
+        for B, C, H, W, N, k, stride, pad in [(1, 1, 28, 28, 6, 5, 1, 0), (2, 6, 12, 12, 16, 5, 1, 0),
+                                              (2, 3, 8, 8, 4, 3, 1, 1), (1, 2, 7, 9, 3, 3, 2, 1)]:
+            with self.subTest(B=B, C=C, H=H, W=W, N=N, k=k, stride=stride, pad=pad):
+                x = rng.integers(-128, 128, (B, C, H, W), dtype=np.int8)
+                wt = rng.integers(-128, 128, (N, C, k, k), dtype=np.int8)
+                bias = rng.integers(-5000, 5000, N).astype(np.int32)
+                y = conv2d(x, wt.reshape(N, -1).T, bias, scale=1000, shift=16, relu=True,
+                           kh=k, kw=k, stride=stride, padding=pad)
+                acc = ref_conv_acc(x.tolist(), wt.tolist(), stride, pad)
+                exp = [[[[ref_requant_one(a, bias[n], 1000, 16, True) for a in row] for row in ch]
+                        for n, ch in enumerate(img)] for img in acc]
+                self.assertEqual(y.tolist(), exp)
+
+    def test_maxpool(self):
+        x = i8([[[[1, -5, 2, 0, 9], [3, 4, -1, 7, 9], [-8, -9, 0, 0, 9]]]])   # 3x5 -> 1x2, edges dropped
+        self.assertEqual(maxpool2d(x).tolist(), [[[[4, 7]]]])
+
+    def test_maxpool_commutes_with_requantize(self):
+        # why pooling INT8 outputs on the Arm side is exact
+        rng = np.random.default_rng(SEED)
+        acc = rng.integers(-2 ** 20, 2 ** 20, (8, 6)).astype(np.int32)
+        bias = rng.integers(-1000, 1000, 6).astype(np.int32)
+        q = requantize(acc, bias, 300, 14, True)
+        pooled_q = maxpool2d(q.T.reshape(1, 6, 2, 4))
+        pooled_acc = (acc.T.reshape(1, 6, 2, 4).reshape(1, 6, 1, 2, 2, 2).max(axis=(3, 5)))
+        req = requantize(pooled_acc.transpose(0, 2, 3, 1).reshape(-1, 6), bias, 300, 14, True)
+        self.assertEqual(pooled_q.transpose(0, 2, 3, 1).reshape(-1, 6).tolist(), req.tolist())
+
+    def test_rejects_bad_inputs(self):
+        with self.assertRaises(ValueError):
+            im2col(np.zeros((2, 3), np.int8), 1, 1)
+        with self.assertRaises(ValueError):
+            im2col(np.zeros((1, 1, 2, 2), np.int8), 3, 3)
+        with self.assertRaises(ValueError):
+            im2col(np.full((1, 1, 2, 2), 200), 1, 1)
+        with self.assertRaises(ValueError):
+            maxpool2d(np.zeros((1, 1, 1, 1), np.int8))
 
 
 # ---------------- layer (end to end) ----------------

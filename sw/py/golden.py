@@ -1,7 +1,17 @@
 """Bit-exact golden model: matmul, bias, ReLU, requantize (rounding + saturation).
 
-This is the source of truth for every testbench. Status: SKELETON.
+This is the source of truth for every testbench.
 Use NumPy integer types only (no floats) so results are exact.
+
+Data layout (results/log.md D6), shared with quantize.py and vecgen.py:
+  * Activations between layers are INT8 NCHW [B, C, H, W] (PyTorch order),
+    so flattening before an FC layer matches torch.flatten(1).
+  * Weights are W[K, N]: K = inputs (rows of the array), N = outputs (columns).
+    Conv K index is (c, i, j) row-major, i.e. torch weight.reshape(N, -1).T.
+  * im2col rows are (b, oy, ox) row-major, so conv output is [B*Ho*Wo, N].
+  * Pooling is 2x2 max on INT8 outputs, done on the Arm side (not in RTL).
+    Max commutes with requantize (scale >= 0 makes it monotonic), so pooling
+    INT8 values gives the same result as pooling the accumulators.
 """
 import numpy as np
 
@@ -105,3 +115,54 @@ def layer(x: np.ndarray, w: np.ndarray, bias: np.ndarray, scale: int, shift: int
     """One fully connected / im2col-lowered layer: matmul + requantize."""
     
     return requantize(matmul_int8(x, w), bias, scale, shift, relu)
+
+
+def im2col(x: np.ndarray, kh: int, kw: int, stride: int = 1, padding: int = 0) -> np.ndarray:
+    """Lower an INT8 NCHW batch to the matmul input X[M, K] for a conv layer.
+
+    x: [B, C, H, W].  Returns X[B*Ho*Wo, C*kh*kw] with rows ordered (b, oy, ox)
+    and columns ordered (c, i, j), matching W[K, N] = weight.reshape(N, -1).T.
+    Padding is zeros (INT8 0 is real 0 under symmetric quantization).
+    """
+    x = np.asarray(x)
+    if x.ndim != 4:
+        raise ValueError(f"x must be 4-D [B, C, H, W], instead got x.ndim={x.ndim}")
+    check_range("x", x, INT8_MIN, INT8_MAX)
+    if kh < 1 or kw < 1 or stride < 1 or padding < 0:
+        raise ValueError(f"bad conv geometry kh={kh} kw={kw} stride={stride} padding={padding}")
+    B, C, H, W = x.shape
+    Ho = (H + 2 * padding - kh) // stride + 1
+    Wo = (W + 2 * padding - kw) // stride + 1
+    if Ho < 1 or Wo < 1:
+        raise ValueError(f"kernel {kh}x{kw} does not fit input {H}x{W} with padding {padding}")
+    xp = np.pad(x, ((0, 0), (0, 0), (padding, padding), (padding, padding)))
+    cols = np.empty((B, Ho, Wo, C, kh, kw), dtype=x.dtype)
+    for i in range(kh):
+        for j in range(kw):
+            patch = xp[:, :, i:i + stride * (Ho - 1) + 1:stride, j:j + stride * (Wo - 1) + 1:stride]
+            cols[:, :, :, :, i, j] = patch.transpose(0, 2, 3, 1)
+    return cols.reshape(B * Ho * Wo, C * kh * kw)
+
+
+def conv2d(x: np.ndarray, w: np.ndarray, bias: np.ndarray, scale: int, shift: int, relu: bool,
+           kh: int, kw: int, stride: int = 1, padding: int = 0) -> np.ndarray:
+    """INT8 conv as im2col + layer(). x: [B, C, H, W], w: W[C*kh*kw, N] -> [B, N, Ho, Wo]."""
+    x = np.asarray(x)
+    B, _, H, W = x.shape
+    Ho = (H + 2 * padding - kh) // stride + 1
+    Wo = (W + 2 * padding - kw) // stride + 1
+    y = layer(im2col(x, kh, kw, stride, padding), w, bias, scale, shift, relu)
+    return y.reshape(B, Ho, Wo, -1).transpose(0, 3, 1, 2)
+
+
+def maxpool2d(x: np.ndarray, k: int = 2) -> np.ndarray:
+    """k x k max pool, stride k, on INT8 NCHW. Odd edges are dropped (like PyTorch)."""
+    x = np.asarray(x)
+    if x.ndim != 4:
+        raise ValueError(f"x must be 4-D [B, C, H, W], instead got x.ndim={x.ndim}")
+    check_range("x", x, INT8_MIN, INT8_MAX)
+    B, C, H, W = x.shape
+    Ho, Wo = H // k, W // k
+    if k < 1 or Ho < 1 or Wo < 1:
+        raise ValueError(f"pool size {k} does not fit input {H}x{W}")
+    return x[:, :, :Ho * k, :Wo * k].reshape(B, C, Ho, k, Wo, k).max(axis=(3, 5))
