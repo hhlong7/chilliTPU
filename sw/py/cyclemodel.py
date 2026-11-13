@@ -16,6 +16,10 @@ from spec import COLS, ROWS
 from math import ceil
 import heapq
 from collections import deque
+import argparse
+import time
+
+import numpy as np
 
 @dataclass(frozen=True)
 class Layer:
@@ -428,12 +432,194 @@ def selftest_part2() -> None:
     print("cyclemodel selftest part 2: PASS")
 
 
+# --------------------------------------------------------------------------- part 3: workloads, random mixes, sweep
+def mnist_fc(batch: int = 1) -> list[Layer]:
+    """MNIST fully connected net. PLACEHOLDER sizes (784-128-64-10): confirm with quantize.py."""
+    return [
+        Layer("fc1", batch, 784, 128),
+        Layer("fc2", batch, 128, 64),
+        Layer("fc3", batch, 64, 10),
+    ]
+
+
+def cifar_cnn(batch: int = 1) -> list[Layer]:
+    """Small CIFAR-10 CNN after im2col. PLACEHOLDER architecture: confirm with quantize.py.
+    conv 3->16 3x3 (32x32), pool, conv 16->32 3x3 (16x16), pool, conv 32->64 3x3 (8x8), pool, fc 1024->10."""
+    return [
+        Layer("conv1", 1024 * batch, 27, 16),
+        Layer("conv2", 256 * batch, 144, 32),
+        Layer("conv3", 64 * batch, 288, 64),
+        Layer("fc", batch, 1024, 10),
+    ]
+
+
+MODEL_ZOO = {"lenet5": lenet5, "mnist_fc": mnist_fc, "cifar_cnn": cifar_cnn}
+
+
+def random_network(rng: np.random.Generator, name: str, batch: int) -> list[Layer]:
+    """2-6 layers with log-uniform shapes: M in [1, 1024]*batch-ish, K in [9, 512], N in [4, 128]."""
+    def logu(lo: int, hi: int) -> int:
+        return int(round(np.exp(rng.uniform(np.log(lo), np.log(hi)))))
+    layers = []
+    for i in range(int(rng.integers(2, 7))):
+        conv = rng.random() < 0.5
+        M = logu(16, 1024) * batch if conv else batch
+        layers.append(Layer(f"{name}.l{i}", M, logu(9, 512), logu(4, 128)))
+    return layers
+
+
+def make_mix(rng: np.random.Generator, kind: str, n_tenants: int, batch: int,
+             spread: float = 0.5) -> list[Network]:
+    """A random multi-tenant workload.
+
+    kind = "zoo":     each tenant is a random model from MODEL_ZOO
+           "random":  each tenant is a random_network()
+           "similar": every tenant is the same model (where partitioning should help least)
+    Arrivals are uniform in [0, spread * mean single-network time]; the first arrives at 0.
+    """
+    if kind == "zoo":
+        names = rng.choice(list(MODEL_ZOO), size=n_tenants)
+        nets = [Network(f"{n}#{i}", MODEL_ZOO[n](batch)) for i, n in enumerate(names)]
+    elif kind == "random":
+        nets = [Network(f"rand#{i}", random_network(rng, f"rand#{i}", batch)) for i in range(n_tenants)]
+    elif kind == "similar":
+        name = str(rng.choice(list(MODEL_ZOO)))
+        nets = [Network(f"{name}#{i}", MODEL_ZOO[name](batch)) for i in range(n_tenants)]
+    else:
+        raise ValueError(kind)
+    mean_t = np.mean([run_sequential([n])["makespan"] for n in nets])
+    arrivals = rng.uniform(0, spread * mean_t, size=n_tenants).astype(int)
+    arrivals[0] = 0
+    for n, a in zip(nets, arrivals):
+        n.arrival = int(a)
+    return nets
+
+
+def sweep(n_mixes: int = 50, seed: int = 1, kinds=("zoo", "random", "similar"),
+          tenants=(2, 4), batches=(1, 8, 32)) -> list[dict]:
+    """Run every policy x feed x shadow on the same random mixes. One row per (config, mix, policy)."""
+    rows = []
+    for ki, kind in enumerate(kinds):
+        for n_t in tenants:
+            for batch in batches:
+                for m in range(n_mixes):
+                    mix_seed = [seed, ki, n_t, batch, m]        # reproducible: rerun one mix with this list
+                    nets = make_mix(np.random.default_rng(mix_seed), kind, n_t, batch)
+                    for shadow in (False, True):
+                        seq = simulate(nets, "sequential", "A", shadow)   # feed mode doesn't matter here
+                        for feed in ("A", "B"):
+                            for policy in POLICIES:
+                                r = seq if policy == "sequential" else simulate(nets, policy, feed, shadow)
+                                lat = np.mean(list(r["latency"].values()))
+                                seq_lat = np.mean(list(seq["latency"].values()))
+                                rows.append({
+                                    "kind": kind, "tenants": n_t, "batch": batch, "mix": m, "seed": mix_seed,
+                                    "shadow": shadow, "feed": feed, "policy": policy,
+                                    "makespan": r["makespan"], "util": r["util"],
+                                    "speedup": seq["makespan"] / r["makespan"],
+                                    "lat_speedup": seq_lat / lat,
+                                })
+    return rows
+
+
+def _geomean(xs) -> float:
+    return float(np.exp(np.mean(np.log(xs))))
+
+
+def summarize(rows: list[dict]) -> str:
+    """Markdown tables: speedup over sequential, per feed mode and shadow setting."""
+    def pick(**kw):
+        return [r for r in rows if all(r[k] == v for k, v in kw.items())]
+
+    out = []
+    out.append("All numbers are cycle-model ESTIMATES (sw/py/cyclemodel.py), not measurements.\n")
+    out.append("Speedup = sequential makespan / policy makespan (>1 is better). "
+               "Geomean over all mixes; min/max in brackets.\n")
+
+    out.append("### Overall\n")
+    out.append("| shadow | feed | equal (paper) | proportional (ours) | prop beats equal | util seq → prop |")
+    out.append("|---|---|---|---|---|---|")
+    for shadow in (False, True):
+        for feed in ("A", "B"):
+            eq = pick(shadow=shadow, feed=feed, policy="equal")
+            pr = pick(shadow=shadow, feed=feed, policy="proportional")
+            sq = pick(shadow=shadow, feed=feed, policy="sequential")
+            wins = sum(p["makespan"] < e["makespan"] for p, e in zip(pr, eq)) / len(pr)
+            fmt = lambda rs: (f"{_geomean([r['speedup'] for r in rs]):.2f}× "
+                              f"[{min(r['speedup'] for r in rs):.2f}, {max(r['speedup'] for r in rs):.2f}]")
+            out.append(f"| {'on' if shadow else 'off'} | {feed} | {fmt(eq)} | {fmt(pr)} | {wins:.0%} | "
+                       f"{np.mean([r['util'] for r in sq]):.1%} → {np.mean([r['util'] for r in pr]):.1%} |")
+
+    out.append("\n### Proportional speedup by workload (shadow on)\n")
+    batches = sorted({r["batch"] for r in rows})
+    out.append("| kind | tenants | feed | " + " | ".join(f"batch {b}" for b in batches) + " |")
+    out.append("|---|---|---|" + "---|" * len(batches))
+    for kind in sorted({r["kind"] for r in rows}):
+        for n_t in sorted({r["tenants"] for r in rows}):
+            for feed in ("A", "B"):
+                cells = [f"{_geomean([r['speedup'] for r in pick(kind=kind, tenants=n_t, batch=b, feed=feed, shadow=True, policy='proportional')]):.2f}×"
+                         for b in batches]
+                out.append(f"| {kind} | {n_t} | {feed} | " + " | ".join(cells) + " |")
+
+    # the Milestone 1 question: does the shared feed cap the gains?
+    out.append("\n### Shared-feed cap (Milestone 1 question)\n")
+    for shadow in (False, True):
+        gA = _geomean([r["speedup"] for r in pick(shadow=shadow, feed="A", policy="proportional")])
+        gB = _geomean([r["speedup"] for r in pick(shadow=shadow, feed="B", policy="proportional")])
+        verdict = (f"partitioning is {1 - gA:.0%} SLOWER than running the networks one at a time"
+                   if gA < 1 else f"partitioning keeps {(gA - 1) / (gB - 1):.0%} of the per-partition-feed gain"
+                   if gB > 1 else "neither feed mode beats sequential")
+        out.append(f"- shadow {'on' if shadow else 'off'}: proportional gets {gA:.2f}× with a shared feed (A) "
+                   f"vs {gB:.2f}× with per-partition feed (B). With a shared feed, {verdict}.")
+    return "\n".join(out)
+
+
+def run_sweep_cli(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="cycle-model sweep")
+    ap.add_argument("--sweep", action="store_true")
+    ap.add_argument("--mixes", type=int, default=50, help="random mixes per setting")
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--out", help="write the markdown summary to this file")
+    args = ap.parse_args(argv)
+    t0 = time.time()
+    rows = sweep(n_mixes=args.mixes, seed=args.seed)
+    text = (f"Sweep: {args.mixes} mixes per setting, seed {args.seed}, "
+            f"{len(rows)} runs, {time.time() - t0:.0f} s\n\n" + summarize(rows))
+    print(text)
+    if args.out:
+        with open(args.out, "w") as f:
+            f.write(text + "\n")
+        print(f"\nwrote {args.out}")
+    return 0
+
+
+def selftest_part3() -> None:
+    """Checks for the workload generators and the sweep."""
+    rng = np.random.default_rng(0)
+    for kind in ("zoo", "random", "similar"):
+        nets = make_mix(rng, kind, 3, 1)
+        assert len(nets) == 3 and nets[0].arrival == 0
+        assert all(l.M > 0 and l.K > 0 and l.N > 0 for n in nets for l in n.layers)
+    # same seed -> same mix (reproducible)
+    a = make_mix(np.random.default_rng(42), "random", 2, 8)
+    b = make_mix(np.random.default_rng(42), "random", 2, 8)
+    assert [(n.arrival, n.layers) for n in a] == [(n.arrival, n.layers) for n in b]
+    # tiny sweep runs and sequential is always speedup 1.0
+    rows = sweep(n_mixes=2, tenants=(2,), batches=(1,))
+    assert all(abs(r["speedup"] - 1.0) < 1e-12 for r in rows if r["policy"] == "sequential")
+    assert all(r["util"] <= 1.0 for r in rows)
+    print("cyclemodel selftest part 3: PASS")
+
+
 # --------------------------------------------------------------------------- entry point
 def main() -> int:
     if "--selftest" in sys.argv:
         selftest()
         selftest_part2()
+        selftest_part3()
         return 0
+    if "--sweep" in sys.argv:
+        return run_sweep_cli(sys.argv[1:])
     for shadow in (False, True):
         r = run_sequential([Network("lenet", lenet5(1))], shadow=shadow)
         print(f"sequential LeNet-5, shadow={shadow}: {r['makespan']} cycles, util {r['util']:.1%}")
