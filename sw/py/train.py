@@ -44,6 +44,12 @@ def load_data(name: str, fake: bool, data_dir: Path):
         c, h, w = SHAPE[name]
         mk = lambda n: (rng.random((n, c, h, w), dtype=np.float32), rng.integers(0, 10, n))
         return (*mk(2048), *mk(512))
+    import os
+    try:   # python.org macOS builds ship without CA certs; certifi's bundle fixes the download
+        import certifi
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    except ImportError:
+        pass
     import torchvision
     cls = {"mnist": torchvision.datasets.MNIST, "cifar10": torchvision.datasets.CIFAR10}[name]
     out = []
