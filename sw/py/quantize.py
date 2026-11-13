@@ -22,9 +22,13 @@ Design decisions documented here (keep aligned with spec.py and RTL):
   Pooling/flatten/ReLU operations retain the stored step. This simple scheme is
   a starting point, not QAT or per-channel
   quantization; compare validation accuracy before treating a model as usable.
-* Conv weights are exported in PyTorch [out,in,kh,kw] order. im2col/address
-  ordering and serialization are owned by vecgen.py / the RTL interface and
-  must be agreed before loading these files directly into hardware.
+* Pooling is 2x2 MaxPool only (no AvgPool: it needs a division with its own
+  rounding rule). It runs on the Arm side on INT8 layer outputs; golden.maxpool2d
+  is the reference. Each model lists the layers followed by a pool in POOL_AFTER.
+* Weights are exported as the hardware matrix W[K, N] (results/log.md D6):
+  Linear [out,in] -> transpose; Conv [out,in,kh,kw] -> reshape(out, -1).T,
+  so K is ordered (c, i, j) to match golden.im2col. The hex file is W row-major
+  (line k*N + n). int8_forward() runs the exported network bit-exactly.
 """
 from __future__ import annotations
 
@@ -38,8 +42,10 @@ import numpy as np
 
 try:
     from spec import INT8_MAX, INT8_MIN, SCALE_W, SHIFT_W
+    import golden
 except ImportError:
     from sw.py.spec import INT8_MAX, INT8_MIN, SCALE_W, SHIFT_W
+    from sw.py import golden
 
 
 @dataclass
@@ -56,6 +62,10 @@ class QuantizedLayer:
     real_multiplier: float
     multiplier_error: float
     relu: bool
+    kernel: tuple[int, int] | None = None   # conv only: (kh, kw)
+    stride: int = 1
+    padding: int = 0
+    pool: int = 0                           # 0 = none, k = k x k max pool after this layer
 
 
 def _torch():
@@ -112,6 +122,38 @@ def encode_requant_multiplier(real_multiplier: float) -> tuple[int, int, float]:
     return scale, shift, (scale / float(1 << shift)) - real_multiplier
 
 
+def weight_to_kn(weight: np.ndarray) -> np.ndarray:
+    """PyTorch weight ([out,in] or [out,in,kh,kw]) -> hardware W[K, N]."""
+    weight = np.asarray(weight)
+    return np.ascontiguousarray(weight.reshape(weight.shape[0], -1).T)
+
+
+def int8_forward(layers: list[QuantizedLayer], x: np.ndarray) -> np.ndarray:
+    """Run the exported INT8 network with the golden model. x: INT8 [B, C, H, W].
+
+    Returns the final layer's INT8 outputs [B, classes]. This is the bit-exact
+    expected result for the board; argmax gives the predicted class.
+    """
+    x = np.asarray(x)
+    for layer in layers:
+        if layer.kind == "conv2d":
+            kh, kw = layer.kernel
+            x = golden.conv2d(x, layer.weight_int8, layer.bias_int32, layer.scale, layer.shift,
+                              layer.relu, kh, kw, layer.stride, layer.padding)
+        else:
+            x = golden.layer(x.reshape(x.shape[0], -1), layer.weight_int8, layer.bias_int32,
+                             layer.scale, layer.shift, layer.relu)
+        if layer.pool:
+            x = golden.maxpool2d(x, layer.pool)
+    return x
+
+
+def quantize_input(x: np.ndarray, input_step: float) -> np.ndarray:
+    """Float input samples -> INT8 with the calibrated input step."""
+    return np.clip(np.rint(np.asarray(x, dtype=np.float64) / input_step),
+                   INT8_MIN, INT8_MAX).astype(np.int8)
+
+
 def build_model(model_name: str):
     """Construct one of the documented starter networks."""
     torch = _torch()
@@ -129,12 +171,14 @@ def build_model(model_name: str):
             return self.fc2(self.relu1(self.fc1(x)))
 
     class LeNet5(nn.Module):
+        POOL_AFTER = ("conv1", "conv2")
+
         def __init__(self):
             super().__init__()
             self.conv1 = nn.Conv2d(1, 6, 5)
-            self.pool1 = nn.AvgPool2d(2)
+            self.pool1 = nn.MaxPool2d(2)
             self.conv2 = nn.Conv2d(6, 16, 5)
-            self.pool2 = nn.AvgPool2d(2)
+            self.pool2 = nn.MaxPool2d(2)
             self.fc1 = nn.Linear(16 * 4 * 4, 120)
             self.fc2 = nn.Linear(120, 84)
             self.fc3 = nn.Linear(84, 10)
@@ -146,6 +190,8 @@ def build_model(model_name: str):
             return self.fc3(torch.relu(self.fc2(torch.relu(self.fc1(x)))))
 
     class CifarCNN(nn.Module):
+        POOL_AFTER = ("conv1", "conv2")
+
         def __init__(self):
             super().__init__()
             self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
@@ -231,6 +277,7 @@ def quantize_model(model, activation_steps: dict[str, float]) -> list[QuantizedL
     affine = [(name, module) for name, module in model.named_modules()
               if isinstance(module, (torch.nn.Linear, torch.nn.Conv2d))]
     layers = []
+    pool_after = set(getattr(model, "POOL_AFTER", ()))
     input_step = activation_steps.get("__input__")
     if input_step is None:
         raise ValueError("input activation step is missing")
@@ -247,10 +294,15 @@ def quantize_model(model, activation_steps: dict[str, float]) -> list[QuantizedL
         relu = index < len(affine) - 1
         real_multiplier = input_step * weight_step / output_step
         scale, shift, error = encode_requant_multiplier(real_multiplier)
+        is_conv = isinstance(module, torch.nn.Conv2d)
+        if is_conv and (module.groups != 1 or module.dilation != (1, 1)
+                        or module.stride[0] != module.stride[1]
+                        or module.padding[0] != module.padding[1]):
+            raise ValueError(f"{name}: only square stride/padding, groups=1, dilation=1 supported")
         layers.append(QuantizedLayer(
             name=name,
-            kind="conv2d" if isinstance(module, torch.nn.Conv2d) else "linear",
-            weight_int8=weight_i8,
+            kind="conv2d" if is_conv else "linear",
+            weight_int8=weight_to_kn(weight_i8),
             bias_int32=bias_i32,
             input_step=input_step,
             weight_step=weight_step,
@@ -260,6 +312,10 @@ def quantize_model(model, activation_steps: dict[str, float]) -> list[QuantizedL
             real_multiplier=real_multiplier,
             multiplier_error=error,
             relu=relu,
+            kernel=tuple(module.kernel_size) if is_conv else None,
+            stride=module.stride[0] if is_conv else 1,
+            padding=module.padding[0] if is_conv else 0,
+            pool=2 if name in pool_after else 0,
         ))
         input_step = output_step
     return layers
@@ -269,7 +325,7 @@ def export_layers(layers: list[QuantizedLayer], output_dir: Path,
                   model_name: str, input_step: float) -> None:
     """Write flattened, two's-complement hex arrays and machine-readable metadata."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    manifest = {"model": model_name, "format_version": 1,
+    manifest = {"model": model_name, "format_version": 2, "weight_layout": "KN",
                 "input_step": input_step, "layers": []}
     for index, layer in enumerate(layers):
         stem = f"layer_{index:02d}"
