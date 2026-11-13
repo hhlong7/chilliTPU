@@ -42,11 +42,14 @@ class Network:
 
 
 def lenet5(batch: int = 1) -> list[Layer]:
-    """LeNet-5 after im2col. Confirm the architecture with quantize.py."""
+    """LeNet-5 after im2col. Mirrors quantize.build_model("lenet5"): change both together.
+
+    28x28 input, no padding: conv1 5x5 -> 24x24, pool -> 12x12, conv2 5x5 -> 8x8, pool -> 4x4.
+    """
     return [
-        Layer("conv1", 784 * batch, 25, 6),     # 1->6, 5x5, 28x28 out
-        Layer("conv2", 100 * batch, 150, 16),   # 6->16, 5x5, 10x10 out
-        Layer("fc1", batch, 400, 120),
+        Layer("conv1", 24 * 24 * batch, 1 * 5 * 5, 6),     # M = 576 output pixels, K = 25
+        Layer("conv2", 8 * 8 * batch, 6 * 5 * 5, 16),      # M = 64, K = 150
+        Layer("fc1", batch, 16 * 4 * 4, 120),              # K = 256
         Layer("fc2", batch, 120, 84),
         Layer("fc3", batch, 84, 10),
     ]
@@ -125,7 +128,7 @@ def run_sequential(networks: list[Network], shadow: bool = False) -> dict:
 # --------------------------------------------------------------------------- self-test
 def selftest() -> None:
     """Reference numbers from the hand derivation (baseline, w = 12, batch 1)."""
-    expect = {"conv1": 2439, "conv2": 3406, "fc1": 12240, "fc2": 2520, "fc3": 238}
+    expect = {"conv1": 1815, "conv2": 2470, "fc1": 7920, "fc2": 2520, "fc3": 238}
     for layer in lenet5(1):
         got = layer_cycles(layer, COLS)
         assert got == expect[layer.name], f"{layer.name}: got {got}, expected {expect[layer.name]}"
@@ -133,14 +136,14 @@ def selftest() -> None:
     assert len(passes(Layer("x", 100, 150, 16), 12)) == 26
 
     one = run_sequential([Network("lenet", lenet5(1))])
-    assert one["makespan"] == 20843, one["makespan"]
+    assert one["makespan"] == 14963, one["makespan"]
 
     two = run_sequential([Network("a", lenet5(1), 0), Network("b", lenet5(1), 5000)])
-    assert two["makespan"] == 2 * 20843                 # b waits for a
-    assert two["latency"]["b"] == 2 * 20843 - 5000
+    assert two["makespan"] == 2 * 14963                 # b waits for a
+    assert two["latency"]["b"] == 2 * 14963 - 5000
 
     late = run_sequential([Network("a", lenet5(1), 0), Network("b", lenet5(1), 30000)])
-    assert late["makespan"] == 30000 + 20843            # idle gap before b
+    assert late["makespan"] == 30000 + 14963            # idle gap before b
 
     # shadow weights can only help
     for layer in lenet5(1):
@@ -434,22 +437,23 @@ def selftest_part2() -> None:
 
 # --------------------------------------------------------------------------- part 3: workloads, random mixes, sweep
 def mnist_fc(batch: int = 1) -> list[Layer]:
-    """MNIST fully connected net. PLACEHOLDER sizes (784-128-64-10): confirm with quantize.py."""
+    """MNIST fully connected net. Mirrors quantize.build_model("mnist-fc"): 784 -> 128 -> 10."""
     return [
-        Layer("fc1", batch, 784, 128),
-        Layer("fc2", batch, 128, 64),
-        Layer("fc3", batch, 64, 10),
+        Layer("fc1", batch, 28 * 28, 128),
+        Layer("fc2", batch, 128, 10),
     ]
 
 
 def cifar_cnn(batch: int = 1) -> list[Layer]:
-    """Small CIFAR-10 CNN after im2col. PLACEHOLDER architecture: confirm with quantize.py.
-    conv 3->16 3x3 (32x32), pool, conv 16->32 3x3 (16x16), pool, conv 32->64 3x3 (8x8), pool, fc 1024->10."""
+    """Small CIFAR-10 CNN after im2col. Mirrors quantize.build_model("cifar-cnn"): change both together.
+
+    32x32x3 input: conv1 3x3 pad 1 -> 32x32, pool -> 16x16, conv2 3x3 pad 1 -> 16x16, pool -> 8x8.
+    """
     return [
-        Layer("conv1", 1024 * batch, 27, 16),
-        Layer("conv2", 256 * batch, 144, 32),
-        Layer("conv3", 64 * batch, 288, 64),
-        Layer("fc", batch, 1024, 10),
+        Layer("conv1", 32 * 32 * batch, 3 * 3 * 3, 16),    # M = 1024, K = 27
+        Layer("conv2", 16 * 16 * batch, 16 * 3 * 3, 32),   # M = 256, K = 144
+        Layer("fc1", batch, 32 * 8 * 8, 128),              # K = 2048
+        Layer("fc2", batch, 128, 10),
     ]
 
 
