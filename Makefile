@@ -27,12 +27,14 @@ RTL_SRCS := $(filter-out $(RTL_PKG),$(wildcard rtl/*.sv))
 # UNUSED* waivers are only for the skeleton stubs; remove them once modules are implemented.
 LINT_FLAGS ?= -Wall -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM
 
-.PHONY: help hooks vectors regs sim sim-xsim lint bitstream fw report clean
+.PHONY: help hooks vectors regs train test-py sim sim-xsim lint bitstream fw report clean
 
 help:
 	@echo "make hooks            install git hooks (blocks direct pushes to main); run once per clone"
 	@echo "make vectors          generate .hex test vectors (sw/py/vecgen.py)"
 	@echo "make regs             generate register files from spec/regmap.yaml"
+	@echo "make train MODEL=m    train + quantize + INT8 accuracy (m = lenet5, mnist-fc, cifar-cnn; needs torch)"
+	@echo "make test-py          run the Python unit tests and cyclemodel self-tests"
 	@echo "make sim              run the UVM regression in Verilator (envs in TBS: $(TBS))"
 	@echo "make sim TB=<name>    run one env, e.g. make sim TB=smoke"
 	@echo "make sim-xsim TB=<n>  run one env in xsim (Vivado PC, needs bash)"
@@ -52,6 +54,14 @@ vectors:
 
 regs:
 	$(PYTHON) scripts/gen_regs.py
+
+MODEL ?= lenet5
+train:
+	$(PYTHON) sw/py/train.py --model $(MODEL)
+
+test-py:
+	$(PYTHON) -m unittest discover -s sw/py
+	$(PYTHON) sw/py/cyclemodel.py --selftest
 
 # ---- Verilator: one build rule per env
 define TB_RULE
