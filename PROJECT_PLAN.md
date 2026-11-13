@@ -242,11 +242,22 @@ chilliTPU/
 - Everything moves through git. Board results and Vivado reports are committed to `results/` with the commit hash they were built from.
 
 ### Git rules
+- **Nobody pushes to `main` directly.** GitHub blocks it (branch ruleset on `main`), and `make hooks` adds a local check that stops it before it leaves your machine. Run `make hooks` once after cloning.
 - `main` must always pass `make sim`.
 - Work on branches named `<name>/<topic>` (e.g. `alex/pe-mulen`).
-- Open a PR for every merge. At least one other person reviews. Paste the `make sim` output in the PR.
+- Open a PR for every merge. At least one other person approves. The PR template asks for the `make sim` output.
 - Spec changes (section 5) need the group's agreement.
 - Never commit generated files that `make` can rebuild, except the reports in `results/`.
+
+Day-to-day flow:
+```bash
+git switch main && git pull                 # start from the latest main
+git switch -c <name>/<topic>                # new branch for your task
+# ...edit, make sim, make lint...
+git add -A && git commit -m "pe: add Mul_En gate"
+git push -u origin <name>/<topic>           # then open a PR on GitHub
+```
+After the PR is approved and merged on GitHub: `git switch main && git pull`, and delete your branch.
 
 ### RTL coding rules
 - Synthesizable SystemVerilog only in `rtl/`: no `initial`, no delays, explicit reset, no latches.

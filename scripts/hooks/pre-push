@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# pre-push hook: refuse direct pushes to main. Push a branch and open a pull request instead.
+# Installed by `make hooks` (sets core.hooksPath to scripts/hooks).
+# GitHub branch protection on main is the real enforcement; this hook just catches it earlier.
+protected="refs/heads/main"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "$remote_ref" == "$protected" ]]; then
+    echo "pre-push: direct pushes to main are blocked."
+    echo "  Make a branch and push that instead, e.g.:"
+    echo "    git switch -c <yourname>/<topic>"
+    echo "    git push -u origin <yourname>/<topic>"
+    echo "  then open a pull request on GitHub."
+    exit 1
+  fi
+done
+exit 0

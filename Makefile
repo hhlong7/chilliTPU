@@ -27,9 +27,10 @@ RTL_SRCS := $(filter-out $(RTL_PKG),$(wildcard rtl/*.sv))
 # UNUSED* waivers are only for the skeleton stubs; remove them once modules are implemented.
 LINT_FLAGS ?= -Wall -Wno-DECLFILENAME -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM
 
-.PHONY: help vectors regs sim sim-xsim lint bitstream fw report clean
+.PHONY: help hooks vectors regs sim sim-xsim lint bitstream fw report clean
 
 help:
+	@echo "make hooks            install git hooks (blocks direct pushes to main); run once per clone"
 	@echo "make vectors          generate .hex test vectors (sw/py/vecgen.py)"
 	@echo "make regs             generate register files from spec/regmap.yaml"
 	@echo "make sim              run the UVM regression in Verilator (envs in TBS: $(TBS))"
@@ -41,6 +42,10 @@ help:
 	@echo "make report           build tables/plots from results (sw/py/analyze.py)"
 	@echo "make clean            remove build/ and vectors/"
 	@echo "envs with a files.f:  $(ALL_TBS)"
+
+hooks:
+	git config core.hooksPath scripts/hooks
+	@echo "git hooks installed from scripts/hooks"
 
 vectors:
 	$(PYTHON) sw/py/vecgen.py
