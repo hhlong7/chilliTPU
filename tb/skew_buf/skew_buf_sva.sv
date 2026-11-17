@@ -1,11 +1,25 @@
-// skew_buf_sva.sv - assertions for skew_buf, attached to the DUT with `bind` in tb_top.sv.
-// Status: SKELETON. Use only SVA both Verilator and xsim support (see tb/README.md).
-// Give every assertion a label (a_*) and add cover properties (c_*) for the interesting cases.
-
-module skew_buf_sva (
+// Assertions for the shared-advance skew-buffer contract.
+module skew_buf_sva #(
+  parameter int ROWS = dnn_pkg::ROWS,
+  parameter int DATA_W = dnn_pkg::DATA_W
+) (
   input logic clk,
-  input logic rst_n
-  // TODO: DUT signals to observe
+  input logic rst_n,
+  input logic advance,
+  input logic in_valid,
+  input logic in_ready,
+  input logic out_valid,
+  input logic signed [DATA_W-1:0] out_data [ROWS]
 );
-  // a_example: assert property (@(posedge clk) disable iff (!rst_n) ...);
+  a_ready_tracks_advance: assert property (@(posedge clk) disable iff (!rst_n)
+    in_ready == advance);
+
+  a_outputs_hold_when_stalled: assert property (@(posedge clk) disable iff (!rst_n)
+    !advance |=> $stable(out_valid) && $stable(out_data));
+
+  c_input_accepted: cover property (@(posedge clk) disable iff (!rst_n)
+    advance && in_valid);
+
+  c_valid_output: cover property (@(posedge clk) disable iff (!rst_n)
+    out_valid);
 endmodule : skew_buf_sva
