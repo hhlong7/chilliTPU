@@ -23,9 +23,7 @@
 //
 // Rules: synthesizable only, no initial blocks or delays, synchronous active-low
 // reset, every output registered. Parameter defaults come from dnn_pkg.
-
-module pe
-#(
+module pe #(
   parameter int DATA_W = dnn_pkg::DATA_W,
   parameter int PSUM_W = dnn_pkg::PSUM_W
 ) (
@@ -63,7 +61,7 @@ module pe
   logic signed [PROD_W-1:0] product;
 
   assign product = a_in * w_active;   // INT8 x INT8 -> INT16, one DSP48E1
-  assign w_out   = w_shadow;
+  assign w_out   = w_shadow;         // w_shadow is the weight-chain register
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -73,8 +71,10 @@ module pe
       a_out      <= '0;
       psum_out   <= '0;
     end else begin
-      if (w_load) w_shadow <= w_in;
-      if (w_swap) w_active <= w_shadow;
+      if (w_load)
+        w_shadow <= w_in;
+      if (w_swap)
+        w_active <= w_shadow;
       if (en) begin
         a_out      <= a_in;
         mul_en_out <= mul_en_in;
