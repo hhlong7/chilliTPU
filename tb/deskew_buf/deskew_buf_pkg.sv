@@ -20,6 +20,7 @@ package deskew_buf_pkg;
       data_t d[COLS];
       for(int i=0;i<cycles+COLS+4;i++) begin
         bit adv, valid;
+        deskew_item it;
         if(random_mode) begin
           adv=$urandom_range(0,99)<80;
           valid=$urandom_range(0,99)<75;
@@ -37,7 +38,7 @@ package deskew_buf_pkg;
           end
           if(i>=cycles) valid=0;
         end
-        deskew_item it=deskew_item::type_id::create("cycle");
+        it=deskew_item::type_id::create("cycle");
         start_item(it); it.advance=adv; it.in_valid=valid;
         foreach(d[c]) it.in_data[c]=d[c]; finish_item(it);
       end
@@ -88,12 +89,21 @@ package deskew_buf_pkg;
       foreach(q[c,s])begin q[c][s]=0;v[c][s]=0;end last_q=0;last_v=0;endfunction
     function void write(deskew_item it);
       bit ev=last_v;checks++;
-      if(it.out_data[COLS-1]!==last_q)begin errors++;`uvm_error("SB","last column data mismatch")end
+      if(it.out_data[COLS-1]!==last_q) begin
+        errors++;
+        `uvm_error("SB", "last column data mismatch")
+      end
       for(int c=0;c<COLS-1;c++)begin
-        if(it.out_data[c]!==q[c][COLS-2-c])begin errors++;`uvm_error("SB",$sformatf("column %0d data mismatch",c))end
+        if(it.out_data[c]!==q[c][COLS-2-c]) begin
+          errors++;
+          `uvm_error("SB", $sformatf("column %0d data mismatch",c))
+        end
         ev &= v[c][COLS-2-c];
       end
-      if(it.out_valid!==ev)begin errors++;`uvm_error("SB","out_valid mismatch")end
+      if(it.out_valid!==ev) begin
+        errors++;
+        `uvm_error("SB", "out_valid mismatch")
+      end
       if(it.advance)begin
         last_q=it.in_valid?it.in_data[COLS-1]:'0;last_v=it.in_valid;
         for(int c=0;c<COLS-1;c++)begin
