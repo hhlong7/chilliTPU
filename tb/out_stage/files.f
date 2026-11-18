@@ -2,6 +2,7 @@
 // The Makefile adds the UVM library and +incdir+tb/common itself.
 rtl/pkg/dnn_pkg.sv
 rtl/out_stage.sv
+tb/common/tb_common_pkg.sv
 tb/out_stage/out_stage_if.sv
 tb/out_stage/out_stage_sva.sv
 tb/out_stage/out_stage_pkg.sv
