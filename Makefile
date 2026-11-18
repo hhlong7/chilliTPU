@@ -9,7 +9,7 @@ UVM_HOME  ?= third_party/uvm-core/src
 
 # ---------------------------------------------------------------- testbenches
 # TBS: envs in the regression (`make sim`). Add an env here once its first test passes.
-TBS ?= smoke pe
+TBS ?= smoke pe bram_sdp accum_mem
 # TB: run a single env, e.g. `make sim TB=pe`
 TB  ?=
 ALL_TBS := $(patsubst tb/%/files.f,%,$(wildcard tb/*/files.f))
@@ -90,7 +90,7 @@ sim-xsim:
 
 lint:
 	@status=0; for f in $(RTL_SRCS); do \
-	   $(VERILATOR) --lint-only --quiet $(LINT_FLAGS) $(RTL_PKG) $$f --top-module $$(basename $$f .sv) \
+	   $(VERILATOR) --lint-only --quiet $(LINT_FLAGS) -y rtl $(RTL_PKG) $$f --top-module $$(basename $$f .sv) \
 	     && echo "lint ok   $$f" || { echo "lint FAIL $$f"; status=1; }; \
 	 done; exit $$status
 
