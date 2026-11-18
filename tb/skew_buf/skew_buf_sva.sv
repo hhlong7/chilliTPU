@@ -14,8 +14,13 @@ module skew_buf_sva #(
   a_ready_tracks_advance: assert property (@(posedge clk) disable iff (!rst_n)
     in_ready == advance);
 
-  a_outputs_hold_when_stalled: assert property (@(posedge clk) disable iff (!rst_n)
-    !advance |=> $stable(out_valid) && $stable(out_data));
+  a_valid_holds_when_stalled: assert property (@(posedge clk) disable iff (!rst_n)
+    !advance |=> $stable(out_valid));
+
+  for (genvar r = 0; r < ROWS; r++) begin : g_row_stall_assertions
+    a_row_data_holds_when_stalled: assert property (@(posedge clk) disable iff (!rst_n)
+      !advance |=> $stable(out_data[r]));
+  end
 
   c_input_accepted: cover property (@(posedge clk) disable iff (!rst_n)
     advance && in_valid);
