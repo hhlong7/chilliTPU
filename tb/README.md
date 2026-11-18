@@ -27,6 +27,14 @@ partition gates, and shadow-weight loading/swapping. Run it with Icarus Verilog
 from the repo root (Bash):
 
 ```bash
+bash scripts/run_tb.sh                # all six configurations
+bash scripts/run_tb.sh 12 12          # one geometry
+bash scripts/run_tb.sh 2 3 4 16       # geometry and widths
+```
+
+The equivalent commands for a single default directed test are:
+
+```bash
 mkdir -p build/systolic_array
 iverilog -g2012 -s tb_systolic_array_directed -o build/systolic_array/directed.vvp \
   rtl/pkg/dnn_pkg.sv rtl/pe.sv rtl/systolic_array.sv tb/systolic_array/tb_directed.sv

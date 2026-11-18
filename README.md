@@ -25,6 +25,32 @@ bash scripts/lint.sh pe              # PE only
 bash scripts/lint.sh systolic_array  # array, including its PE dependency
 ```
 
+Terminal synthesis and directed simulation (Bash or MSYS2 UCRT64):
+
+```bash
+bash scripts/synth.sh                 # Vivado synthesis: PE and default 12x12 array
+bash scripts/synth.sh pe              # PE only; or use systolic_array
+bash scripts/run_tb.sh                # all six directed test configurations
+bash scripts/run_tb.sh 12 12          # one array configuration
+bash scripts/run_tb.sh 2 3 4 16       # ROWS COLS DATA_W PSUM_W
+```
+
+Synthesis requires Vivado; the script detects standard Windows installs or
+accepts `VIVADO=/path/to/vivado`. Set `FPGA_PART` and `CLK_PERIOD_NS` to override
+the Zybo Z7-20 part (`xc7z020clg400-1`) and 10 ns clock. Checkpoints, netlists,
+and utilization/timing reports go to `build/synth/<top>/`. Timing reports are
+unplaced synthesis estimates. Install Vivado's Zynq-7000 device support for the
+Zybo target. Stock Yosys cannot read this array's unpacked
+ports directly. Tests require Icarus Verilog (`iverilog` and `vvp`); compile and
+run logs go to `build/systolic_array/<configuration>/`.
+
+Without Bash, run synthesis from a Vivado command prompt or PowerShell with
+Vivado on `PATH`:
+
+```text
+vivado -mode batch -source scripts/synth.tcl -tclargs all xc7z020clg400-1 10
+```
+
 ## Layout
 
 | Folder | What lives there |
