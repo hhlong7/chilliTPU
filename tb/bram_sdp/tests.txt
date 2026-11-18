@@ -1,2 +1,5 @@
 # Tests that `make sim TB=bram_sdp` runs: one "<uvm_test_name> <seed>" per line.
-# Add this env to TBS in the Makefile once its first test passes.
+bram_sdp_directed_test 1
+bram_sdp_random_test 1
+bram_sdp_random_test 7
+bram_sdp_random_test 1234

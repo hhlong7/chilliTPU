@@ -6,3 +6,6 @@ tb/skew_buf/skew_buf_if.sv
 tb/skew_buf/skew_buf_sva.sv
 tb/skew_buf/skew_buf_pkg.sv
 tb/skew_buf/tb_top.sv
+tb/skew_buf/skew_buf_sva.sv
+tb/skew_buf/skew_buf_pkg.sv
+tb/skew_buf/tb_top.sv

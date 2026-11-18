@@ -10,7 +10,7 @@ package tb_common_pkg;
 
   // `include "base_test.svh"
   // `include "hex_vector_reader.svh"
-  // `include "int8_ref.svh"
+   `include "int8_ref.svh"
   // `include "stream_agent.svh"
   // `include "axil_agent.svh"
   // `include "bram_agent.svh"
