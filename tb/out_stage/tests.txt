@@ -1,2 +1,7 @@
 # Tests that `make sim TB=out_stage` runs: one "<uvm_test_name> <seed>" per line.
 # Add this env to TBS in the Makefile once its first test passes.
+out_stage_directed_test 1
+out_stage_vector_test 1
+out_stage_random_test 1
+out_stage_random_test 7
+out_stage_backpressure_test 1234
