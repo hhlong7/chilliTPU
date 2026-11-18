@@ -1,7 +1,12 @@
-// skew_buf_if.sv - interface between the UVM env and the skew_buf DUT.
-// Status: SKELETON. Add signals, clocking blocks (drv_cb / mon_cb), and modports.
-
-interface skew_buf_if (input logic clk);
+// Interface between the UVM environment and skew_buf.
+interface skew_buf_if #(parameter int ROWS = dnn_pkg::ROWS,
+                        parameter int DATA_W = dnn_pkg::DATA_W)
+                       (input logic clk);
   logic rst_n;
-  // TODO: DUT signals
+  logic advance;
+  logic in_valid;
+  logic in_ready;
+  logic signed [DATA_W-1:0] in_data [ROWS];
+  logic out_valid;
+  logic signed [DATA_W-1:0] out_data [ROWS];
 endinterface : skew_buf_if
