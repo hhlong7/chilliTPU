@@ -80,36 +80,43 @@ package deskew_buf_pkg;
     endtask
   endclass
 
+  // Spec-level model (not a copy of the RTL structure): keep the last COLS input
+  // bundles in advance order. Column c must show the bundle accepted COLS-c advances
+  // ago, which undoes the array's one-cycle-per-column output stagger.
   class deskew_scoreboard extends uvm_scoreboard;
     uvm_analysis_imp #(deskew_item,deskew_scoreboard) imp;
-    data_t q[COLS][COLS]; bit v[COLS][COLS]; data_t last_q;bit last_v;
+    data_t hist_data[COLS][COLS];   // hist_data[k] = bundle accepted k+1 advances ago (bubbles = 0)
+    bit    hist_valid[COLS];
     int unsigned checks,errors;
     `uvm_component_utils(deskew_scoreboard)
-    function new(string n,uvm_component p);super.new(n,p);imp=new("imp",this);
-      foreach(q[c,s])begin q[c][s]=0;v[c][s]=0;end last_q=0;last_v=0;endfunction
+    function new(string n,uvm_component p);
+      super.new(n,p); imp=new("imp",this);
+      foreach (hist_data[k,c]) hist_data[k][c] = '0;
+      foreach (hist_valid[k]) hist_valid[k] = 0;
+    endfunction
     function void write(deskew_item it);
-      bit ev=last_v;checks++;
-      if(it.out_data[COLS-1]!==last_q) begin
-        errors++;
-        `uvm_error("SB", "last column data mismatch")
-      end
-      for(int c=0;c<COLS-1;c++)begin
-        if(it.out_data[c]!==q[c][COLS-2-c]) begin
+      bit ev = 1;
+      checks++;
+      for (int c = 0; c < COLS; c++) begin
+        int k = COLS-1-c;
+        if (it.out_data[c] !== hist_data[k][c]) begin
           errors++;
-          `uvm_error("SB", $sformatf("column %0d data mismatch",c))
+          `uvm_error("SB", $sformatf("cycle %0d column %0d got=%0d expected=%0d (bundle from %0d advances ago)",
+                     checks, c, it.out_data[c], hist_data[k][c], COLS-c))
         end
-        ev &= v[c][COLS-2-c];
+        ev &= hist_valid[k];
       end
-      if(it.out_valid!==ev) begin
+      if (it.out_valid !== ev) begin
         errors++;
-        `uvm_error("SB", "out_valid mismatch")
+        `uvm_error("SB", $sformatf("cycle %0d out_valid got=%b expected=%b", checks, it.out_valid, ev))
       end
-      if(it.advance)begin
-        last_q=it.in_valid?it.in_data[COLS-1]:'0;last_v=it.in_valid;
-        for(int c=0;c<COLS-1;c++)begin
-          for(int s=COLS-2-c;s>0;s--)begin q[c][s]=q[c][s-1];v[c][s]=v[c][s-1];end
-          q[c][0]=it.in_valid?it.in_data[c]:'0;v[c][0]=it.in_valid;
+      if (it.advance) begin
+        for (int k = COLS-1; k > 0; k--) begin
+          hist_data[k]  = hist_data[k-1];
+          hist_valid[k] = hist_valid[k-1];
         end
+        for (int c = 0; c < COLS; c++) hist_data[0][c] = it.in_valid ? it.in_data[c] : '0;
+        hist_valid[0] = it.in_valid;
       end
     endfunction
   endclass

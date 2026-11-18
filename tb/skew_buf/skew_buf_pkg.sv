@@ -123,30 +123,30 @@ package skew_buf_pkg;
     endtask
   endclass
 
+  // Spec-level model (not a copy of the RTL structure): keep the last ROWS input
+  // bundles in advance order. Row r must show the bundle accepted r+1 advances ago,
+  // so row r is always one advance behind row r-1 (what the array's psum timing needs).
   class skew_buf_scoreboard extends uvm_scoreboard;
     uvm_analysis_imp #(skew_buf_item, skew_buf_scoreboard) imp;
-    data_t model_data[ROWS][ROWS];
-    bit model_valid[ROWS][ROWS];
-    data_t row0_model;
-    bit row0_valid;
+    data_t hist_data[ROWS][ROWS];   // hist_data[k] = bundle accepted k+1 advances ago (bubbles = 0)
+    bit    hist_valid[ROWS];
     int unsigned checked, errors;
     `uvm_component_utils(skew_buf_scoreboard)
     function new(string name, uvm_component parent);
       super.new(name, parent); imp = new("imp", this);
-      foreach (model_data[r,s]) begin model_data[r][s] = '0; model_valid[r][s] = 0; end
-      row0_model = '0; row0_valid = 0;
+      foreach (hist_data[k, r]) hist_data[k][r] = '0;
+      foreach (hist_valid[k]) hist_valid[k] = 0;
     endfunction
     function void write(skew_buf_item it);
-      bit exp_valid;
+      bit exp_valid = 1;
       checked++;
-      exp_valid = row0_valid;
       foreach (it.out_data[r]) begin
-        data_t exp_data;
-        if (r == 0) exp_data = row0_model;
-        else begin exp_data = model_data[r][r-1]; exp_valid &= model_valid[r][r-1]; end
+        data_t exp_data = hist_data[r][r];
+        exp_valid &= hist_valid[r];
         if (it.out_data[r] !== exp_data) begin
           errors++;
-          `uvm_error("SKEW_SB", $sformatf("cycle %0d row %0d data got=%0d expected=%0d", checked, r, it.out_data[r], exp_data))
+          `uvm_error("SKEW_SB", $sformatf("cycle %0d row %0d data got=%0d expected=%0d (bundle from %0d advances ago)",
+                     checked, r, it.out_data[r], exp_data, r + 1))
         end
       end
       if (it.out_valid !== exp_valid) begin
@@ -154,18 +154,14 @@ package skew_buf_pkg;
         `uvm_error("SKEW_SB", $sformatf("cycle %0d out_valid got=%b expected=%b", checked, it.out_valid, exp_valid))
       end
 
-      // Model post-edge state. Data advances only on the shared array enable.
+      // Model post-edge state. History advances only on the shared array enable.
       if (it.advance) begin
-        row0_model = it.in_valid ? it.in_data[0] : '0;
-        row0_valid = it.in_valid;
-        for (int r = 1; r < ROWS; r++) begin
-          for (int s = r-1; s > 0; s--) begin
-            model_data[r][s] = model_data[r][s-1];
-            model_valid[r][s] = model_valid[r][s-1];
-          end
-          model_data[r][0] = it.in_valid ? it.in_data[r] : '0;
-          model_valid[r][0] = it.in_valid;
+        for (int k = ROWS-1; k > 0; k--) begin
+          hist_data[k]  = hist_data[k-1];
+          hist_valid[k] = hist_valid[k-1];
         end
+        foreach (it.in_data[r]) hist_data[0][r] = it.in_valid ? it.in_data[r] : '0;
+        hist_valid[0] = it.in_valid;
       end
     endfunction
   endclass
