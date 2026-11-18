@@ -90,7 +90,7 @@ sim-xsim:
 
 lint:
 	@status=0; for f in $(RTL_SRCS); do \
-	   $(VERILATOR) --lint-only --quiet $(LINT_FLAGS) $(RTL_PKG) $$f --top-module $$(basename $$f .sv) \
+	   $(VERILATOR) --lint-only --quiet $(LINT_FLAGS) -y rtl +libext+.sv $(RTL_PKG) $$f --top-module $$(basename $$f .sv) \
 	     && echo "lint ok   $$f" || { echo "lint FAIL $$f"; status=1; }; \
 	 done; exit $$status
 

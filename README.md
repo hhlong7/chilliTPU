@@ -16,6 +16,15 @@ make sim TB=smoke      # UVM smoke test in Verilator
 make lint              # lint all RTL
 ```
 
+To lint only the PE and systolic array with Verilator (Bash on Mac/Linux or the
+MSYS2 UCRT64 shell on Windows):
+
+```bash
+bash scripts/lint.sh                 # both modules; fails if either fails
+bash scripts/lint.sh pe              # PE only
+bash scripts/lint.sh systolic_array  # array, including its PE dependency
+```
+
 ## Layout
 
 | Folder | What lives there |
