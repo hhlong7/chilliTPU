@@ -13,14 +13,21 @@ Data layout (results/log.md D6), shared with quantize.py and vecgen.py:
     Max commutes with requantize (scale >= 0 makes it monotonic), so pooling
     INT8 values gives the same result as pooling the accumulators.
 """
+
+from typing import NamedTuple
+
 import numpy as np
 
-from spec import ACC_W, BIAS_W, INT8_MIN, INT8_MAX, ROUNDING, SCALE_W, SHIFT_W
+from spec import ACC_W, BIAS_W, COLS, INT8_MIN, INT8_MAX, PSUM_W, ROUNDING, ROWS, SCALE_W, SHIFT_W
+
+
 
 ACC_MIN = -(1 << (ACC_W - 1))
 ACC_MAX = (1 << (ACC_W - 1)) - 1
 BIAS_MIN = -(1 << (BIAS_W - 1))
 BIAS_MAX = (1 << (BIAS_W - 1)) - 1
+PSUM_MIN = -(1 << (PSUM_W - 1))
+PSUM_MAX = (1 << (PSUM_W - 1)) - 1
 SCALE_MAX = (1 << SCALE_W) - 1   # scale is unsigned
 SHIFT_MAX = (1 << SHIFT_W) - 1
 
@@ -62,6 +69,59 @@ def matmul_int8(x: np.ndarray, w: np.ndarray) -> np.ndarray:
     check_range("acc", acc, ACC_MIN, ACC_MAX)
 
     return acc.astype(np.int32)
+
+
+class Tile(NamedTuple):
+    n0: int
+    k0: int
+    psum: np.ndarray
+    acc: np.ndarray
+    first: bool
+    last: bool
+
+def tiled_matmul(x: np.ndarray, w: np.ndarray, rows: int = ROWS,
+                 width: int = COLS):
+
+    x = np.asarray(x)
+    w = np.asarray(w)
+
+    if x.ndim != 2 or w.ndim != 2:
+        raise ValueError(f"x and w must be 2-D, but got x.ndim = {x.ndim}, w.ndim = {w.ndim}")
+    if x.shape[1] != w.shape[0]:
+        raise ValueError(f"inner dimensions differ: x is {x.shape}, w is {w.shape}")
+    if 0 in x.shape or w.shape[1] == 0:
+        raise ValueError(f"M, K, and N must be >=1, but got x {x.shape}, w {w.shape}")
+    if rows < 1 or width < 1:
+        raise ValueError(f"rows and width must be >= 1, but got rows = {rows}, width = {width}")
+
+    check_range("x", x, INT8_MIN, INT8_MAX)
+    check_range("w", w, INT8_MIN, INT8_MAX)
+
+    M, K = x.shape
+    N = w.shape[1]
+    x64 = x.astype(np.int64)
+    w64 = w.astype(np.int64)
+    y = np.zeros((M, N), dtype = np.int32)
+    tiles = []
+
+    for n0 in range(0, N, width):
+        acc = None
+
+        for k0 in range(0, K, rows):
+            psum = x64[:, k0:k0 + rows] @ w64[k0:k0 + rows, n0:n0 + width]
+            check_range("psum", psum, PSUM_MIN, PSUM_MAX)
+            acc = psum if acc is None else acc + psum
+            check_range("running acc", acc, ACC_MIN, ACC_MAX)
+            first = (k0 == 0)
+            last = (k0 + rows >= K)
+            tiles.append(Tile(n0, k0, psum.astype(np.int32), acc.astype(np.int32), first, last))
+
+        y[:, n0:n0 + width] = acc
+
+    return y, tiles
+
+
+
 
 
 

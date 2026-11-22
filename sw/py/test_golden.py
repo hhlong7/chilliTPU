@@ -15,7 +15,7 @@ from fractions import Fraction
 
 import numpy as np
 
-from golden import conv2d, im2col, layer, matmul_int8, maxpool2d, requantize
+from golden import conv2d, im2col, layer, matmul_int8, maxpool2d, requantize, tiled_matmul
 
 SEED = 20261112
 
@@ -294,6 +294,110 @@ class TestLayer(unittest.TestCase):
                 y = layer(x, w, bias, scale, shift, relu)
                 acc = ref_matmul(x.tolist(), w.tolist())
                 self.assertEqual(y.tolist(), ref_requantize(acc, bias.tolist(), scale, shift, relu))
+
+
+# ---------------- tiled_matmul (D3 tile order) ----------------
+
+class TestTiledMatmul(unittest.TestCase):
+
+    def test_matches_untiled(self):
+        rng = np.random.default_rng(SEED)
+        # (M, K, N, rows, width): exact fits, edge tiles in K and N, partition widths, 1x1 tiles
+        for M, K, N, rows, width in [(1, 1, 1, 12, 12), (5, 12, 12, 12, 12), (7, 30, 17, 12, 12),
+                                     (3, 100, 25, 12, 12), (13, 25, 1, 12, 12), (4, 40, 37, 12, 6),
+                                     (2, 13, 13, 12, 3), (6, 9, 10, 1, 1), (1, 144, 40, 12, 12)]:
+            with self.subTest(seed=SEED, M=M, K=K, N=N, rows=rows, width=width):
+                x = rng.integers(-128, 128, (M, K), dtype=np.int8)
+                w = rng.integers(-128, 128, (K, N), dtype=np.int8)
+                y, tiles = tiled_matmul(x, w, rows, width)
+                self.assertEqual(y.dtype, np.int32)
+                self.assertEqual(y.tolist(), matmul_int8(x, w).tolist())
+                self.assertEqual(len(tiles), math.ceil(N / width) * math.ceil(K / rows))
+                # every N tile has exactly one first and one last K tile (also when K % rows == 0)
+                self.assertEqual(sum(t.first for t in tiles), math.ceil(N / width))
+                self.assertEqual(sum(t.last for t in tiles), math.ceil(N / width))
+
+    def test_tile_order_and_flags(self):
+        # K = 30 -> K tiles at 0, 12, 24 (last is 6 deep); N = 25 -> N tiles at 0, 12, 24 (last is 1 wide)
+        x = np.ones((2, 30), np.int8)
+        w = np.ones((30, 25), np.int8)
+        _, tiles = tiled_matmul(x, w, 12, 12)
+        self.assertEqual([(t.n0, t.k0) for t in tiles],
+                         [(n0, k0) for n0 in (0, 12, 24) for k0 in (0, 12, 24)])   # N outer, K inner
+        self.assertEqual([t.first for t in tiles], [True, False, False] * 3)
+        self.assertEqual([t.last for t in tiles], [False, False, True] * 3)
+        self.assertEqual([t.psum.shape for t in tiles], [(2, 12)] * 6 + [(2, 1)] * 3)
+        self.assertEqual([int(t.psum[0, 0]) for t in tiles], [12, 12, 6] * 3)   # depth of each K tile
+        self.assertEqual([int(t.acc[0, 0]) for t in tiles], [12, 24, 30] * 3)   # running sum
+
+    def test_partial_sums_vs_reference(self):
+        rng = np.random.default_rng(SEED + 1)
+        M, K, N, rows, width = 3, 29, 14, 12, 5
+        x = rng.integers(-128, 128, (M, K), dtype=np.int8)
+        w = rng.integers(-128, 128, (K, N), dtype=np.int8)
+        y, tiles = tiled_matmul(x, w, rows, width)
+        running = {}                       # n0 -> running sum so far, as plain Python ints
+        for t in tiles:
+            with self.subTest(n0=t.n0, k0=t.k0):
+                xs = x[:, t.k0:t.k0 + rows].tolist()
+                ws = w[t.k0:t.k0 + rows, t.n0:t.n0 + width].tolist()
+                psum = ref_matmul(xs, ws)
+                self.assertEqual(t.psum.dtype, np.int32)
+                self.assertEqual(t.psum.tolist(), psum)
+                if t.first:
+                    running[t.n0] = psum
+                else:
+                    running[t.n0] = [[a + b for a, b in zip(ra, rb)] for ra, rb in zip(running[t.n0], psum)]
+                self.assertEqual(t.acc.tolist(), running[t.n0])
+                if t.last:
+                    self.assertEqual(t.acc.tolist(), y[:, t.n0:t.n0 + width].tolist())
+
+    def test_single_tile(self):
+        # K <= rows and N <= width: one pass, first and last on the same tile
+        x = i8([[1, 2, 3], [-4, 5, -6]])
+        w = i8([[1, 0], [0, 1], [-1, 2]])
+        y, tiles = tiled_matmul(x, w)
+        self.assertEqual(len(tiles), 1)
+        t = tiles[0]
+        self.assertTrue(t.first and t.last)
+        self.assertEqual((t.n0, t.k0), (0, 0))
+        self.assertEqual(t.psum.tolist(), t.acc.tolist())
+        self.assertEqual(y.tolist(), [[-2, 8], [2, -7]])
+
+    def test_extremes_do_not_wrap(self):
+        x = np.full((2, 36), -128, np.int8)
+        w = np.full((36, 3), -128, np.int8)
+        y, tiles = tiled_matmul(x, w)
+        self.assertTrue(all((t.psum == 12 * 16384).all() for t in tiles))
+        self.assertTrue((y == 36 * 16384).all())
+
+    def test_rejects_bad_inputs(self):
+        x_ok, w_ok = np.zeros((2, 3), np.int8), np.zeros((3, 2), np.int8)
+        cases = {
+            "inner dims":  (np.zeros((2, 3), np.int8), np.zeros((4, 3), np.int8), 12, 12, ValueError),
+            "x not 2-D":   (np.zeros(3, np.int8), np.zeros((3, 1), np.int8), 12, 12, ValueError),
+            "empty K":     (np.zeros((2, 0), np.int8), np.zeros((0, 2), np.int8), 12, 12, ValueError),
+            "empty N":     (x_ok, np.zeros((3, 0), np.int8), 12, 12, ValueError),
+            "rows = 0":    (x_ok, w_ok, 0, 12, ValueError),
+            "width = 0":   (x_ok, w_ok, 12, 0, ValueError),
+            "x above 127": (np.array([[128]]), i8([[1]]), 12, 12, ValueError),
+            "float input": (np.array([[1.0]]), i8([[1]]), 12, 12, TypeError),
+        }
+        for name, (x, w, rows, width, err) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(err):
+                    tiled_matmul(x, w, rows, width)
+
+    def test_rejects_running_sum_overflow(self):
+        # The final sum fits INT32 (matmul_int8 accepts it), but the running sum after the
+        # first half passes INT32 max. The RTL would wrap there, so the model must refuse.
+        half = 140_000                     # 140000 * 16384 = 2.29e9 > 2**31 - 1
+        x = np.full((1, 2 * half), -128, np.int8)
+        w = np.concatenate([np.full(half, -128), np.full(half, 127)]).astype(np.int8).reshape(-1, 1)
+        self.assertEqual(matmul_int8(x, w).item(), half * (16384 - 16256))
+        with self.assertRaises(ValueError):
+            tiled_matmul(x, w, rows=4096)
+
 
 
 if __name__ == "__main__":
