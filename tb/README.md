@@ -42,6 +42,19 @@ vvp build/systolic_array/directed.vvp
 ```
 
 Each test must print exactly one `PASS <tb>.<test> seed=<s>` or `FAIL ...` line.
+
+Generate the D5 fixtures with `make vectors` before running the array-core
+bench (`make sim TB=systolic_array`) or the default regression. The array-core
+bench checks seven single-tile cases through skew, array, and deskew. Its
+sequence loads all shadow weight rows bottom first, pulses `w_swap`, then
+feeds one bundle per enabled edge. With the first feed accepted at edge 0,
+deskew samples the first column at edge `ROWS + 1`. Its common input valid
+stays high through edge `M - 1 + ROWS + COLS` for a continuous M-row tile.
+The consumer samples aligned row m at enabled edge `m + 1 + ROWS + COLS`
+(latency 25 for 12×12). Keep advancing through that final sample. A separate
+diagnostic inserts one bubble and holds the core on the first result. The
+scoreboard uses accepted input history for row identity and checks scalar
+valid separately.
 The runner treats a missing PASS line, any UVM_ERROR or UVM_FATAL, or a non-zero exit as a failure.
 Logs go to `build/<tb>/`.
 
