@@ -9,7 +9,7 @@ package tb_common_pkg;
   import uvm_pkg::*;
 
   // `include "base_test.svh"
-  // `include "hex_vector_reader.svh"
+  `include "hex_vector_reader.svh"
    `include "int8_ref.svh"
   // `include "stream_agent.svh"
   // `include "axil_agent.svh"

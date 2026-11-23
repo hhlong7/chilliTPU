@@ -9,7 +9,7 @@ UVM_HOME  ?= third_party/uvm-core/src
 
 # ---------------------------------------------------------------- testbenches
 # TBS: envs in the regression (`make sim`). Add an env here once its first test passes.
-TBS ?= smoke pe bram_sdp accum_mem skew_buf deskew_buf
+TBS ?= smoke pe bram_sdp accum_mem skew_buf deskew_buf systolic_array
 # TB: run a single env, e.g. `make sim TB=pe`
 TB  ?=
 ALL_TBS := $(patsubst tb/%/files.f,%,$(wildcard tb/*/files.f))

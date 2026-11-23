@@ -26,3 +26,7 @@ Long:
   - Rule now written in both file headers: skew_buf delays row r by r+1 advances; deskew_buf delays column c by COLS-c advances. Every lane is a plain delay line, no special-case lane.
   - Why the module tests passed: the scoreboards copied the RTL structure, so they predicted the same wrong delays. Both scoreboards are now spec-level (a history of accepted bundles, row r = bundle from r+1 advances ago), and the old RTL fails them on the first bundle. Lesson: a scoreboard should model the spec, not mirror the RTL.
   - skew_buf and deskew_buf added to TBS.
+
+## 2026-11-22
+- Array-core UVM passed seven D5 single-tile cases and a rerun with a bubble and a stall (91 rows total). The consumer samples each row 25 enabled edges after acceptance on the 12×12 array. The scoreboard tracks accepted rows and checks scalar valid separately. See `tb/README.md` for the weight, feed, and drain schedule.
+- A temporary skew RTL change that advanced row 1 one edge early failed the same test with accumulator mismatches. Added `systolic_array` to TBS.
